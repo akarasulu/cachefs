@@ -241,7 +241,7 @@ mode_t permchain_apply(struct permchain *pc, mode_t tgtmode)
     const char *p;
 
     while (pc != NULL) {
-        #if BINDFS_DEBUG
+        #if CACHEFS_DEBUG
         if (pc->op == 'o') {
             DPRINTF("STAT MODE: %o, op = %c %o", tgtmode, pc->op, pc->mode.as_octal);
         } else if (pc->op != '\0') {

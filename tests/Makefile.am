@@ -12,5 +12,5 @@ odirect_read_SOURCES = odirect_read.c
 odirect_write_SOURCES = odirect_write.c
 test_dir_rewind_SOURCES = test_dir_rewind.c
 
-TESTS = test_bindfs.rb
+TESTS = test_cachefs.rb
 SUBDIRS = internals

@@ -17,8 +17,8 @@
     along with bindfs.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifndef INC_BINDFS_RATE_LIMITER_H
-#define INC_BINDFS_RATE_LIMITER_H
+#ifndef INC_CACHEFS_RATE_LIMITER_H
+#define INC_CACHEFS_RATE_LIMITER_H
 
 #include <string.h>
 #include <pthread.h>

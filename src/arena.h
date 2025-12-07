@@ -1,5 +1,5 @@
-#ifndef INC_BINDFS_ARENA_H
-#define INC_BINDFS_ARENA_H
+#ifndef INC_CACHEFS_ARENA_H
+#define INC_CACHEFS_ARENA_H
 
 #include <stdlib.h>
 

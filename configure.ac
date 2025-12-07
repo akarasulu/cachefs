@@ -1,4 +1,4 @@
-AC_INIT([bindfs],[1.18.3],[martin.partel@gmail.com])
+AC_INIT([cachefs],[1.0.0],[akarasulu@gmail.com])
 
 AM_INIT_AUTOMAKE([foreign serial-tests])
 AC_CONFIG_HEADERS([config.h])
@@ -126,7 +126,19 @@ AS_IF([test "x$with_fuse2" = "xyes"],
     )]
 )
 
-AC_CONFIG_FILES([Makefile \
+# Check for SQLite3 for metadata caching
+PKG_CHECK_MODULES([SQLITE3], [sqlite3],
+        [
+        AC_DEFINE([HAVE_SQLITE3], [1], [Have SQLite3 library])
+        have_sqlite3=yes
+        ],
+        [
+        AC_MSG_WARN([SQLite3 library not found. Metadata cache will be disabled.])
+        AC_MSG_WARN([Install libsqlite3-dev or sqlite package to enable metadata caching.])
+        have_sqlite3=no
+        ]
+)
+AM_CONDITIONAL([HAVE_SQLITE3], [test "x$have_sqlite3" = "xyes"])AC_CONFIG_FILES([Makefile \
     src/Makefile \
     tests/Makefile \
     tests/internals/Makefile])

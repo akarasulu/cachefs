@@ -17,8 +17,8 @@
     along with bindfs.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifndef INC_BINDFS_MISC_H
-#define INC_BINDFS_MISC_H
+#ifndef INC_CACHEFS_MISC_H
+#define INC_CACHEFS_MISC_H
 
 #include <stdbool.h>
 #include <stdlib.h>

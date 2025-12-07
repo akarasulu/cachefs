@@ -1,17 +1,18 @@
-.TH BINDFS 1
+.TH CACHEFS 1
 
 
 .SH NAME
-bindfs \(hy mount \-\-bind in user\-space
+cachefs \(hy cached mount with permission remapping
 
 
 .SH SYNOPSIS
-\fBbindfs\fP [\fIoptions\fP]\fI dir mountpoint
+\fBcachefs\fP [\fIoptions\fP]\fI dir mountpoint
 
 
 .SH DESCRIPTION
-A FUSE filesystem for mirroring the contents of a directory to another
-directory, with changes to permissions and other features.
+A FUSE filesystem for caching and mirroring the contents of a directory to another
+directory, with metadata caching, block-level file caching, and changes to permissions.
+Based on bindfs with added persistent caching layer.
 
 .SH FILE OWNERSHIP
 .TP

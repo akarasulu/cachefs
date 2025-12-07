@@ -17,8 +17,8 @@
     along with bindfs.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifndef INC_BINDFS_USERINFO_H
-#define INC_BINDFS_USERINFO_H
+#ifndef INC_CACHEFS_USERINFO_H
+#define INC_CACHEFS_USERINFO_H
 
 #include <config.h>
 

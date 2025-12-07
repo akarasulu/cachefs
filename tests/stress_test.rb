@@ -53,7 +53,7 @@ class ChildProcess
   end
 end
 
-class BindfsRunner < ChildProcess
+class CachefsRunner < ChildProcess
   def initialize(options = {})
     @valgrind = options[:valgrind]
     @valgrind_tool = options[:valgrind_tool] || 'memcheck'
@@ -131,8 +131,8 @@ FileUtils.rm_rf MNT_DIR
 FileUtils.mkdir_p SRC_DIR
 FileUtils.mkdir_p MNT_DIR
 
-bindfs_runner = BindfsRunner.new
-bindfs_runner.start
+cachefs_runner = CachefsRunner.new
+cachefs_runner.start
 
 copiers = [
   FileCopier.new(:prefix => "big", :num_copies => 4, :size => "500M", :iterations => 100),
@@ -142,6 +142,6 @@ copiers = [
 copiers.each(&:start)
 copiers.each(&:wait)
 
-bindfs_runner.interrupt
-bindfs_runner.wait
+cachefs_runner.interrupt
+cachefs_runner.wait
 

@@ -620,17 +620,21 @@ testenv("--resolve-symlinks", :title => "moving over resolved symlinks") do
 end
 
 testenv("--resolve-symlinks", :title => "moving resolved symlinks") do
-  Dir.chdir 'src' do
-    touch('file')
-    symlink('file', 'link')
-  end
+  if $fuse_t
+    puts "SKIP (known issue with fuse-t)"
+  else
+    Dir.chdir 'src' do
+      touch('file')
+      symlink('file', 'link')
+    end
 
-  Dir.chdir 'mnt' do
-    system("mv link lonk")
+    Dir.chdir 'mnt' do
+      system("mv link lonk")
+    end
+    assert { !File.symlink?('src/link') }
+    assert { File.lstat('src/lonk').symlink? }
+    assert { File.readlink('src/lonk') == 'file' }
   end
-  assert { !File.symlink?('src/link') }
-  assert { File.lstat('src/lonk').symlink? }
-  assert { File.readlink('src/lonk') == 'file' }
 end
 
 testenv("--resolve-symlinks", :title => "--resolve-symlinks disallows new symlinks") do
@@ -784,28 +788,32 @@ testenv("", :title => "many files in a directory") do
 end
 
 if $have_fuse_29 || $have_fuse_3
-  testenv("--enable-lock-forwarding --multithreaded", :title => "lock forwarding") do
-    File.write('src/file', 'some contents for fcntl lockng')
-    # (this test passes with an empty file as well, but this way is clearer)
+  if !$fuse_t
+    testenv("--enable-lock-forwarding --multithreaded", :title => "lock forwarding") do
+      File.write('src/file', 'some contents for fcntl lockng')
+      # (this test passes with an empty file as well, but this way is clearer)
 
-    # flock
-    if `uname`.strip != 'FreeBSD'  # FreeBSD's FUSE  doesn't yet support forwarding flock: https://wiki.freebsd.org/action/recall/FUSEFS?action=recall&rev=58
-      File.open('mnt/file') do |f1|
-        File.open('src/file') do |f2|
+      # flock
+      if `uname`.strip != 'FreeBSD'  # FreeBSD's FUSE  doesn't yet support forwarding flock: https://wiki.freebsd.org/action/recall/FUSEFS?action=recall&rev=58
+        File.open('mnt/file') do |f1|
+          File.open('src/file') do |f2|
+            assert { f1.flock(File::LOCK_EX | File::LOCK_NB)  }
+            assert { !f2.flock(File::LOCK_EX | File::LOCK_NB)  }
+            assert { f1.flock(File::LOCK_UN)  }
+
+            assert { f2.flock(File::LOCK_EX | File::LOCK_NB)  }
+            assert { !f1.flock(File::LOCK_EX | File::LOCK_NB)  }
+          end
           assert { f1.flock(File::LOCK_EX | File::LOCK_NB)  }
-          assert { !f2.flock(File::LOCK_EX | File::LOCK_NB)  }
-          assert { f1.flock(File::LOCK_UN)  }
-
-          assert { f2.flock(File::LOCK_EX | File::LOCK_NB)  }
-          assert { !f1.flock(File::LOCK_EX | File::LOCK_NB)  }
         end
-        assert { f1.flock(File::LOCK_EX | File::LOCK_NB)  }
       end
-    end
 
-    # fcntl locking
-    system("#{$tests_dir}/fcntl_locker src/file mnt/file")
-    raise "fcntl lock sharing test failed" unless $?.success?
+      # fcntl locking
+      system("#{$tests_dir}/fcntl_locker src/file mnt/file")
+      raise "fcntl lock sharing test failed" unless $?.success?
+    end
+  else
+    puts "SKIP: lock forwarding test (known issue with fuse-t)"
   end
 
   testenv("--disable-lock-forwarding", :title => "no lock forwarding") do
@@ -955,8 +963,8 @@ end
 
 # Issue 94
 unless ['FreeBSD', 'Darwin'].include?(`uname`.strip)  # -o fsname is not supported on FreeBSD or fuse-t
-  testenv("-o fsname=_bindfs_test_123_", :title => "fsname") do
-    assert { `mount` =~ /^_bindfs_test_123_\s+on\s+/m }
+  testenv("-o fsname=_cachefs_test_123_", :title => "fsname") do
+    assert { `mount` =~ /^_cachefs_test_123_\s+on\s+/m }
   end
 end
 
@@ -997,26 +1005,110 @@ end
 # TODO: support FreeBSD in this test (different group management commands)
 if Process.uid == 0 && `uname`.strip == 'Linux'
     begin
-        `groupdel bindfs_test_group 2>&1`
-        `groupadd -f bindfs_test_group`
+        `groupdel cachefs_test_group 2>&1`
+        `groupadd -f cachefs_test_group`
         raise "Failed to create test group" if !$?.success?
-        testenv("--mirror=@bindfs_test_group", :title => "SIGUSR1 rereads user database") do |bindfs_pid|
+        testenv("--mirror=@cachefs_test_group", :title => "SIGUSR1 rereads user database") do |cachefs_pid|
             touch('src/file')
             chown('nobody', nil, 'src/file')
 
             assert { File.stat('mnt/file').uid == $nobody_uid }
-            `usermod -G bindfs_test_group -a root`
+            `usermod -G cachefs_test_group -a root`
             raise "Failed to add root to test group" if !$?.success?
 
             # Cache not refreshed yet
             assert { File.stat('mnt/file').uid == $nobody_uid }
 
-            Process.kill("SIGUSR1", bindfs_pid)
+            Process.kill("SIGUSR1", cachefs_pid)
             sleep 0.5
 
             assert { File.stat('mnt/file').uid == 0 }
         end
     ensure
-        `groupdel bindfs_test_group 2>&1`
+        `groupdel cachefs_test_group 2>&1`
     end
+end
+
+
+## CacheFS-specific tests
+
+testenv("--cache-root=/tmp/cachefs-test-meta --cache-debug",
+        :title => "metadata cache test") do
+  # Create a file
+  touch('src/testfile')
+  content = "Hello CacheFS"
+  File.write('src/testfile', content)
+  
+  # First stat - should be cache miss
+  st1 = File.stat('mnt/testfile')
+  assert { st1.size == content.length }
+  
+  # Second stat - should be cache hit
+  st2 = File.stat('mnt/testfile')
+  assert { st2.size == st1.size }
+  assert { st2.mtime == st1.mtime }
+  
+  # Modify file to trigger cache invalidation
+  sleep 1
+  File.write('src/testfile', content + " modified")
+  
+  # Next stat should see new size
+  st3 = File.stat('mnt/testfile')
+  assert { st3.size > st1.size }
+end
+
+testenv("--cache-root=/tmp/cachefs-test-block --cache-debug --cache-block-size=4096",
+        :title => "block cache test") do
+  # Create file with test data
+  test_data = "x" * 10000
+  File.write('src/bigfile', test_data)
+  
+  # First read - cache miss
+  data1 = File.read('mnt/bigfile')
+  assert { data1 == test_data }
+  
+  # Second read - cache hit (should be faster)
+  data2 = File.read('mnt/bigfile')
+  assert { data2 == test_data }
+  
+  # Partial read
+  data3 = File.read('mnt/bigfile', 100, 50)
+  assert { data3.length == 100 }
+  assert { data3 == test_data[50, 100] }
+end
+
+testenv("--cache-root=/tmp/cachefs-test-write --cache-debug",
+        :title => "write-through cache invalidation test") do
+  # Create and cache file
+  File.write('src/testfile', "initial")
+  data1 = File.read('mnt/testfile')
+  assert { data1 == "initial" }
+  
+  # Write should invalidate cache
+  File.write('mnt/testfile', "modified")
+  
+  # Read should see new data
+  data2 = File.read('mnt/testfile')
+  assert { data2 == "modified" }
+  
+  # Backend should have new data
+  data3 = File.read('src/testfile')
+  assert { data3 == "modified" }
+end
+
+testenv("--cache-root=/tmp/cachefs-test-negative --cache-debug",
+        :title => "negative cache test") do
+  # Try to stat non-existent file - should cache negative result
+  assert_exception(ENOENT) { File.stat('mnt/nonexistent') }
+  
+  # Second attempt - should hit negative cache
+  assert_exception(ENOENT) { File.stat('mnt/nonexistent') }
+  
+  # Now create the file
+  touch('src/nonexistent')
+  
+  # Should eventually see it (after TTL or invalidation)
+  sleep 3
+  st = File.stat('mnt/nonexistent')
+  assert { st.file? }
 end

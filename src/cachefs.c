@@ -83,6 +83,7 @@
 
 #include <fuse.h>
 #include <fuse_opt.h>
+#include <pthread.h>
 
 #include "arena.h"
 #include "debug.h"
@@ -91,6 +92,12 @@
 #include "rate_limiter.h"
 #include "userinfo.h"
 #include "usermap.h"
+
+#ifdef HAVE_SQLITE3
+#include "cache_meta.h"
+#include "cache_block.h"
+#include "cache_coherency.h"
+#endif
 
 /* Socket file support for MacOS and FreeBSD */
 #if defined(__APPLE__) || defined(__FreeBSD__)
@@ -212,11 +219,96 @@ static struct Settings {
     int64_t uid_offset;
     int64_t gid_offset;
 
+    /* CacheFS settings */
+    char *cache_root;
+    int cache_meta_ttl;
+    int cache_dir_ttl;
+    size_t cache_block_size;
+    size_t cache_max_size;
+    int cache_debug;
+
 } settings;
 
 static bool bindfs_init_failed = false;
 
+#ifdef HAVE_SQLITE3
+/* CacheFS global context */
+static cache_meta_ctx_t *cache_meta_ctx = NULL;
+static cache_block_ctx_t *cache_block_ctx = NULL;
+static pthread_mutex_t cache_init_mutex = PTHREAD_MUTEX_INITIALIZER;
+static bool cache_initialized = false;
 
+/* Cache statistics */
+static struct {
+    unsigned long getattr_hits;
+    unsigned long getattr_misses;
+    unsigned long readdir_hits;
+    unsigned long readdir_misses;
+} cache_stats = {0, 0, 0, 0};
+
+/* Helper to print timestamp */
+static void print_timestamp(FILE *fp) {
+    time_t now = time(NULL);
+    struct tm *tm = localtime(&now);
+    fprintf(fp, "[%02d:%02d:%02d] ", tm->tm_hour, tm->tm_min, tm->tm_sec);
+}
+#endif
+
+
+
+#ifdef HAVE_SQLITE3
+/* Lazy initialization of cache subsystems (called on first use) */
+static void ensure_cache_initialized(void)
+{
+    pthread_mutex_lock(&cache_init_mutex);
+    
+    if (cache_initialized) {
+        pthread_mutex_unlock(&cache_init_mutex);
+        return;
+    }
+    
+    if (settings.cache_root != NULL) {
+        time_t now = time(NULL);
+        struct tm *tm = localtime(&now);
+        fprintf(stderr, "[%02d:%02d:%02d CACHE_INIT] Starting cache initialization...\n", 
+                tm->tm_hour, tm->tm_min, tm->tm_sec);
+        fprintf(stderr, "[%02d:%02d:%02d CACHE_INIT] cache_root=%s\n", 
+                tm->tm_hour, tm->tm_min, tm->tm_sec, settings.cache_root);
+        fprintf(stderr, "[%02d:%02d:%02d CACHE_INIT] PID=%d\n", 
+                tm->tm_hour, tm->tm_min, tm->tm_sec, getpid());
+        
+        /* Initialize metadata cache */
+        fprintf(stderr, "[%02d:%02d:%02d CACHE_INIT] Calling cache_meta_init()...\n", 
+                tm->tm_hour, tm->tm_min, tm->tm_sec);
+        cache_meta_ctx = cache_meta_init(settings.cache_root,
+                                          settings.cache_meta_ttl,
+                                          settings.cache_dir_ttl,
+                                          settings.cache_debug);
+        if (cache_meta_ctx == NULL) {
+            fprintf(stderr, "[CACHE_INIT] ERROR: cache_meta_init() returned NULL\n");
+        } else {
+            fprintf(stderr, "[CACHE_INIT] cache_meta_init() succeeded\n");
+        }
+        
+        /* Initialize block cache */
+        fprintf(stderr, "[CACHE_INIT] Calling cache_block_init()...\n");
+        cache_block_ctx = cache_block_init(settings.cache_root,
+                                            settings.cache_block_size,
+                                            settings.cache_max_size,
+                                            settings.cache_debug);
+        if (cache_block_ctx == NULL) {
+            fprintf(stderr, "[CACHE_INIT] ERROR: cache_block_init() returned NULL\n");
+        } else {
+            fprintf(stderr, "[CACHE_INIT] cache_block_init() succeeded\n");
+        }
+        
+        fprintf(stderr, "[CACHE_INIT] Cache initialization complete\n");
+    }
+    
+    cache_initialized = true;
+    pthread_mutex_unlock(&cache_init_mutex);
+}
+#endif
 
 /* PROTOTYPES */
 
@@ -619,6 +711,26 @@ static int delete_file(const char *path, int (*target_delete_func)(const char *)
     }
 
     res = main_delete_func(real_path);
+    
+    /* Invalidate cache for deleted file/directory and parent dir (before freeing real_path) */
+    if (res == 0 && cache_meta_ctx != NULL) {
+        cache_meta_invalidate(cache_meta_ctx, real_path);
+        /* Invalidate parent directory cache (mtime changed) */
+        char *parent = strdup(real_path);
+        if (parent) {
+            char *last_slash = strrchr(parent, '/');
+            if (last_slash && last_slash != parent) {
+                *last_slash = '\0';
+                cache_dir_invalidate(cache_meta_ctx, parent);
+            }
+            free(parent);
+        }
+        /* Also invalidate blocks for deleted files */
+        if (cache_block_ctx != NULL) {
+            cache_block_invalidate_file(cache_block_ctx, real_path);
+        }
+    }
+    
     free(real_path);
     if (res == -1) {
         free(also_try_delete);
@@ -742,12 +854,66 @@ static void *bindfs_init(struct fuse_conn_info *conn)
 #endif
     }
 
+    /* Initialize CacheFS - directory already created in main() */
+#ifdef HAVE_SQLITE3
+    if (settings.cache_root != NULL) {
+        /* NOTE: Cache initialization deferred to first use (lazy init)
+         * Initializing SQLite during bindfs_init() causes macFUSE to think
+         * the mount point is already a FUSE mount, resulting in error:
+         * "mount_macfuse: mount point X is itself on a macFUSE volume"
+         * 
+         * Cache init happens on first READ/GETATTR operation (not WRITE/CREATE).
+         * This ensures FUSE mount is fully operational before any DB file I/O.
+         */
+        
+        if (settings.cache_debug) {
+            DPRINTF("CacheFS configured: root=%s, meta_ttl=%d, dir_ttl=%d, block_size=%zu, max_size=%zu (lazy init)",
+                    settings.cache_root, settings.cache_meta_ttl, settings.cache_dir_ttl,
+                    settings.cache_block_size, settings.cache_max_size);
+        }
+    }
+#endif
+
     return NULL;
 }
 
 static void bindfs_destroy(void *private_data)
 {
     (void)private_data;
+    
+    /* Print cache statistics */
+#ifdef HAVE_SQLITE3
+    fprintf(stderr, "\n=== CacheFS Statistics ===\n");
+    fprintf(stderr, "getattr hits:   %lu\n", cache_stats.getattr_hits);
+    fprintf(stderr, "getattr misses: %lu\n", cache_stats.getattr_misses);
+    if (cache_stats.getattr_hits + cache_stats.getattr_misses > 0) {
+        double hit_rate = (double)cache_stats.getattr_hits / 
+            (cache_stats.getattr_hits + cache_stats.getattr_misses) * 100.0;
+        fprintf(stderr, "getattr hit rate: %.1f%%\n", hit_rate);
+    }
+    fprintf(stderr, "readdir hits:   %lu\n", cache_stats.readdir_hits);
+    fprintf(stderr, "readdir misses: %lu\n", cache_stats.readdir_misses);
+    if (cache_stats.readdir_hits + cache_stats.readdir_misses > 0) {
+        double hit_rate = (double)cache_stats.readdir_hits / 
+            (cache_stats.readdir_hits + cache_stats.readdir_misses) * 100.0;
+        fprintf(stderr, "readdir hit rate: %.1f%%\n", hit_rate);
+    }
+    fprintf(stderr, "Cache meta ctx: %p\n", (void*)cache_meta_ctx);
+    fprintf(stderr, "==========================\n\n");
+    fflush(stderr);
+#endif
+    
+    /* Cleanup CacheFS */
+#ifdef HAVE_SQLITE3
+    if (cache_meta_ctx != NULL) {
+        cache_meta_destroy(cache_meta_ctx);
+        cache_meta_ctx = NULL;
+    }
+    if (cache_block_ctx != NULL) {
+        cache_block_destroy(cache_block_ctx);
+        cache_block_ctx = NULL;
+    }
+#endif
 }
 
 #ifdef HAVE_FUSE_3
@@ -763,13 +929,92 @@ static int bindfs_getattr(const char *path, struct stat *stbuf)
     (void)fi;
 #endif
 
+#ifdef HAVE_SQLITE3
+    /* Lazy init cache on first use */
+    if (settings.cache_root != NULL && !cache_initialized) {
+        ensure_cache_initialized();
+    }
+#endif
+
+    /* Check cache first */
+    if (cache_meta_ctx != NULL) {
+        cache_meta_entry_t cached;
+        bool valid;
+        
+        /* Check cache (both positive and negative entries) */
+        if (cache_meta_lookup(cache_meta_ctx, path, &cached, &valid) == 0 && valid) {
+            /* Negative cache hit - file doesn't exist */
+            if (cached.type == CACHE_ENTRY_NEG) {
+                if (settings.cache_debug) {
+                    print_timestamp(stderr);
+                    fprintf(stderr, "getattr negative cache hit: %s\n", path);
+                    fflush(stderr);
+                }
+                return -ENOENT;
+            }
+            
+            /* Positive cache hit - use cached metadata including inode */
+            if (cached.type == CACHE_ENTRY_FILE || cached.type == CACHE_ENTRY_DIR) {
+                __sync_fetch_and_add(&cache_stats.getattr_hits, 1);
+                if (settings.cache_debug) {
+                    print_timestamp(stderr);
+                    fprintf(stderr, "getattr HIT: %s\n", path);
+                    fflush(stderr);
+                }
+                
+                /* Build stat structure from cached data */
+                memset(stbuf, 0, sizeof(struct stat));
+                stbuf->st_mode = cached.mode;
+                stbuf->st_size = cached.size;
+                stbuf->st_mtime = cached.mtime;
+                stbuf->st_ctime = cached.ctime;
+                stbuf->st_uid = cached.uid;
+                stbuf->st_gid = cached.gid;
+                stbuf->st_ino = cached.ino;  /* Use cached inode - no backend access! */
+                
+                /* Apply bindfs transformations (UID/GID/permission remapping) */
+                real_path = process_path(path, true);
+                if (real_path == NULL)
+                    return -errno;
+                
+                res = getattr_common(real_path, stbuf);
+                free(real_path);
+                return res;
+            }
+        }
+    }
+
+    /* Cache miss - fetch from backend */
+    __sync_fetch_and_add(&cache_stats.getattr_misses, 1);
+    if (settings.cache_debug) {
+        print_timestamp(stderr);
+        fprintf(stderr, "getattr MISS: %s\n", path);
+        fflush(stderr);
+    }
     real_path = process_path(path, true);
     if (real_path == NULL)
         return -errno;
 
     if (lstat(real_path, stbuf) == -1) {
+        int err = errno;
+        
+        /* Store negative entry in cache (using real_path) */
+#ifdef HAVE_SQLITE3
+        if (cache_meta_ctx != NULL && err == ENOENT) {
+            cache_meta_store_negative(cache_meta_ctx, real_path);
+        }
+#endif
+        
         free(real_path);
-        return -errno;
+        return -err;
+    }
+
+    /* Store in cache before applying transformations */
+    if (cache_meta_ctx != NULL) {
+        cache_meta_store(cache_meta_ctx, path, stbuf);
+        if (settings.cache_debug) {
+            fprintf(stderr, "[cachefs] getattr stored in cache: %s\n", path);
+        }
     }
 
     res = getattr_common(real_path, stbuf);
@@ -841,6 +1086,60 @@ static int bindfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
         return -errno;
     }
 
+    /* Try cache first (only for non-readdirplus) */
+    if (cache_meta_ctx != NULL && !readdirplus) {
+        cache_dir_entry_t *cached_entries = NULL;
+        size_t cached_count = 0;
+        time_t cached_mtime = 0;
+        bool valid = false;
+
+        if (cache_dir_lookup(cache_meta_ctx, real_path, &cached_entries, 
+                           &cached_count, &cached_mtime, &valid) == 0) {
+            /* Check if directory mtime still matches */
+            struct stat dir_st;
+            if (stat(real_path, &dir_st) == 0 && 
+                dir_st.st_mtime == cached_mtime && valid) {
+                
+                __sync_fetch_and_add(&cache_stats.readdir_hits, 1);
+                if (settings.cache_debug) {
+                    print_timestamp(stderr);
+                    fprintf(stderr, "readdir HIT: %s (%zu entries)\n", path, cached_count);
+                    fflush(stderr);
+                }
+                
+                /* Return cached entries */
+                int result = 0;
+                for (size_t i = 0; i < cached_count; i++) {
+                    #ifdef HAVE_FUSE_3
+                    if (filler(buf, cached_entries[i].name, NULL, 0, 0) != 0) {
+                    #else
+                    if (filler(buf, cached_entries[i].name, NULL, 0) != 0) {
+                    #endif
+                        result = errno != 0 ? -errno : -EIO;
+                        break;
+                    }
+                }
+                
+                cache_dir_entries_free(cached_entries, cached_count);
+                free(real_path);
+                return result;
+            }
+            
+            /* Cache stale - free and continue to backend */
+            cache_dir_entries_free(cached_entries, cached_count);
+        }
+    }
+
+    /* Cache miss or readdirplus - read from backend */
+    if (cache_meta_ctx != NULL && !readdirplus) {
+        __sync_fetch_and_add(&cache_stats.readdir_misses, 1);
+    }
+    if (settings.cache_debug && !readdirplus) {
+        print_timestamp(stderr);
+        fprintf(stderr, "readdir MISS: %s\n", path);
+        fflush(stderr);
+    }
+
     DIR *dp = opendir(real_path);
     if (dp == NULL) {
         free(real_path);
@@ -868,6 +1167,29 @@ static int bindfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     real_path = NULL;
 
     int result = 0;
+    
+    /* For caching: collect entries if not readdirplus */
+    cache_dir_entry_t *entries_to_cache = NULL;
+    size_t entries_count = 0;
+    size_t entries_capacity = 0;
+    struct stat dir_stat_for_cache;
+    bool can_cache = (cache_meta_ctx != NULL && !readdirplus);
+    
+    if (can_cache) {
+        /* Get directory stat for mtime before reading */
+        char *cache_real_path = process_path(path, true);
+        if (cache_real_path && stat(cache_real_path, &dir_stat_for_cache) == 0) {
+            entries_capacity = 64;  /* Initial capacity */
+            entries_to_cache = malloc(entries_capacity * sizeof(cache_dir_entry_t));
+            if (!entries_to_cache) {
+                can_cache = false;
+            }
+        } else {
+            can_cache = false;
+        }
+        free(cache_real_path);
+    }
+    
     while (1) {
         errno = 0;
         struct dirent *de = readdir(dp);
@@ -927,6 +1249,27 @@ static int bindfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
             result = errno != 0 ? -errno : -EIO;
             break;
         }
+        
+        /* Collect entry for caching */
+        if (can_cache && entries_to_cache != NULL) {
+            if (entries_count >= entries_capacity) {
+                entries_capacity *= 2;
+                cache_dir_entry_t *new_entries = realloc(entries_to_cache, 
+                    entries_capacity * sizeof(cache_dir_entry_t));
+                if (new_entries) {
+                    entries_to_cache = new_entries;
+                } else {
+                    can_cache = false;
+                }
+            }
+            
+            if (can_cache) {
+                entries_to_cache[entries_count].name = strdup(de->d_name);
+                entries_to_cache[entries_count].type = (de->d_type == DT_DIR) ? 
+                    CACHE_ENTRY_DIR : CACHE_ENTRY_FILE;
+                entries_count++;
+            }
+        }
     }
 
     if (settings.resolve_symlinks || readdirplus) {
@@ -934,6 +1277,28 @@ static int bindfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     }
 
     closedir(dp);
+    
+    /* Store entries in cache if successful read */
+    if (result == 0 && can_cache && entries_to_cache && entries_count > 0) {
+        char *cache_real_path = process_path(path, true);
+        if (cache_real_path) {
+            cache_dir_store(cache_meta_ctx, cache_real_path, 
+                          entries_to_cache, entries_count, 
+                          dir_stat_for_cache.st_mtime);
+            if (settings.cache_debug) {
+                print_timestamp(stderr);
+                fprintf(stderr, "readdir CACHED: %s (%zu entries)\n", path, entries_count);
+                fflush(stderr);
+            }
+            free(cache_real_path);
+        }
+    }
+    
+    /* Clean up cache collection */
+    if (entries_to_cache) {
+        cache_dir_entries_free(entries_to_cache, entries_count);
+    }
+    
     return result;
 }
 
@@ -1012,6 +1377,22 @@ static int bindfs_mkdir(const char *path, mode_t mode)
 
     fc = fuse_get_context();
     res = chown_new_file(real_path, fc, &chown);
+    
+    /* Invalidate parent directory cache (mtime changed) */
+    if (cache_meta_ctx != NULL) {
+        char *parent = strdup(real_path);
+        if (parent) {
+            char *last_slash = strrchr(parent, '/');
+            if (last_slash && last_slash != parent) {
+                *last_slash = '\0';
+                cache_dir_invalidate(cache_meta_ctx, parent);
+            }
+            free(parent);
+        }
+        /* Also invalidate any cached negative entry for this path */
+        cache_meta_invalidate(cache_meta_ctx, real_path);
+    }
+    
     free(real_path);
 
     return res;
@@ -1048,6 +1429,22 @@ static int bindfs_symlink(const char *from, const char *to)
 
     fc = fuse_get_context();
     res = chown_new_file(real_to, fc, &lchown);
+    
+    /* Invalidate parent directory cache (mtime changed) */
+    if (cache_meta_ctx != NULL) {
+        char *parent = strdup(real_to);
+        if (parent) {
+            char *last_slash = strrchr(parent, '/');
+            if (last_slash && last_slash != parent) {
+                *last_slash = '\0';
+                cache_dir_invalidate(cache_meta_ctx, parent);
+            }
+            free(parent);
+        }
+        /* Also invalidate any cached negative entry for this path */
+        cache_meta_invalidate(cache_meta_ctx, real_to);
+    }
+    
     free(real_to);
 
     return res;
@@ -1094,6 +1491,38 @@ static int bindfs_rename(const char *from, const char *to)
 
 #endif // HAVE_FUSE_3
 
+    /* Invalidate cache for both old and new paths and parent dirs (before freeing) */
+    if (cache_meta_ctx != NULL) {
+        cache_meta_invalidate(cache_meta_ctx, real_from);
+        cache_meta_invalidate(cache_meta_ctx, real_to);
+        
+        /* Invalidate parent directory caches (mtime changed) */
+        char *parent_from = strdup(real_from);
+        if (parent_from) {
+            char *last_slash = strrchr(parent_from, '/');
+            if (last_slash && last_slash != parent_from) {
+                *last_slash = '\0';
+                cache_dir_invalidate(cache_meta_ctx, parent_from);
+            }
+            free(parent_from);
+        }
+        
+        char *parent_to = strdup(real_to);
+        if (parent_to) {
+            char *last_slash = strrchr(parent_to, '/');
+            if (last_slash && last_slash != parent_to) {
+                *last_slash = '\0';
+                cache_dir_invalidate(cache_meta_ctx, parent_to);
+            }
+            free(parent_to);
+        }
+        
+        /* Also invalidate blocks for renamed files */
+        if (cache_block_ctx != NULL) {
+            cache_block_invalidate_file(cache_block_ctx, real_from);
+        }
+    }
+
     free(real_from);
     free(real_to);
     if (res == -1)
@@ -1118,6 +1547,12 @@ static int bindfs_link(const char *from, const char *to)
     }
 
     res = link(real_from, real_to);
+    
+    /* Invalidate any cached negative entry for the new link */
+    if (cache_meta_ctx != NULL && res == 0) {
+        cache_meta_invalidate(cache_meta_ctx, real_to);
+    }
+    
     free(real_from);
     free(real_to);
     if (res == -1)
@@ -1358,6 +1793,22 @@ static int bindfs_create(const char *path, mode_t mode, struct fuse_file_info *f
 
     fc = fuse_get_context();
     chown_new_file(real_path, fc, &chown);
+    
+    /* Invalidate parent directory cache (mtime changed) */
+    if (cache_meta_ctx != NULL) {
+        char *parent = strdup(real_path);
+        if (parent) {
+            char *last_slash = strrchr(parent, '/');
+            if (last_slash && last_slash != parent) {
+                *last_slash = '\0';
+                cache_dir_invalidate(cache_meta_ctx, parent);
+            }
+            free(parent);
+        }
+        /* Also invalidate any cached negative entry for this path */
+        cache_meta_invalidate(cache_meta_ctx, real_path);
+    }
+    
     free(real_path);
 
     fi->fh = fd;
@@ -1368,6 +1819,7 @@ static int bindfs_open(const char *path, struct fuse_file_info *fi)
 {
     int fd;
     char *real_path;
+    struct stat backend_st;
 
     real_path = process_path(path, true);
     if (real_path == NULL)
@@ -1384,10 +1836,29 @@ static int bindfs_open(const char *path, struct fuse_file_info *fi)
 #endif
 
     fd = open(real_path, flags);
-    free(real_path);
-    if (fd == -1)
+    if (fd == -1) {
+        free(real_path);
         return -errno;
+    }
 
+    /* Revalidation on open: check if cached data is still valid */
+    if (cache_meta_ctx != NULL && fstat(fd, &backend_st) == 0) {
+        cache_meta_entry_t cached;
+        bool valid;
+        
+        if (cache_meta_lookup(cache_meta_ctx, real_path, &cached, &valid) == 0) {
+            /* Compare mtime and size with cached values */
+            if (cached.mtime != backend_st.st_mtime || cached.size != backend_st.st_size) {
+                /* Cache is stale - invalidate file blocks and metadata */
+                if (cache_block_ctx != NULL) {
+                    cache_block_invalidate_file(cache_block_ctx, real_path);
+                }
+                cache_meta_invalidate(cache_meta_ctx, real_path);
+            }
+        }
+    }
+
+    free(real_path);
     fi->fh = fd;
     return 0;
 }
@@ -1396,9 +1867,17 @@ static int bindfs_read(const char *path, char *buf, size_t size, off_t offset,
                        struct fuse_file_info *fi)
 {
     int res;
-    (void) path;
 
     char *target_buf = buf;
+
+#ifdef HAVE_SQLITE3
+    /* Lazy init cache on first use */
+    if (settings.cache_root != NULL && !cache_initialized) {
+        fprintf(stderr, "[READ] path=%s - triggering cache init\n", path);
+        ensure_cache_initialized();
+        fprintf(stderr, "[READ] cache init returned\n");
+    }
+#endif
 
     if (settings.read_limiter) {
         rate_limiter_wait(settings.read_limiter, size);
@@ -1415,9 +1894,37 @@ static int bindfs_read(const char *path, char *buf, size_t size, off_t offset,
     }
 #endif
 
+    /* Try block cache first */
+    if (cache_block_ctx != NULL) {
+        size_t block_idx = offset / settings.cache_block_size;
+        size_t block_offset = offset % settings.cache_block_size;
+        
+        if (cache_block_exists(cache_block_ctx, path, block_idx)) {
+            ssize_t bytes_read = cache_block_read(cache_block_ctx, path, block_idx,
+                                                   target_buf, size, block_offset);
+            if (bytes_read >= 0) {
+#ifdef __linux__
+                if (target_buf != buf) {
+                    memcpy(buf, target_buf, bytes_read);
+                    munmap(target_buf, mmap_size);
+                }
+#endif
+                return bytes_read;
+            }
+        }
+    }
+
+    /* Cache miss - read from backend */
     res = pread(fi->fh, target_buf, size, offset);
     if (res == -1)
         res = -errno;
+    
+    /* Store in block cache on successful read */
+    if (res > 0 && cache_block_ctx != NULL) {
+        size_t block_idx = offset / settings.cache_block_size;
+        cache_block_write(cache_block_ctx, path, block_idx,
+                         target_buf, res);
+    }
 
 #ifdef __linux__
     if (target_buf != buf) {
@@ -1433,7 +1940,6 @@ static int bindfs_write(const char *path, const char *buf, size_t size,
                         off_t offset, struct fuse_file_info *fi)
 {
     int res;
-    (void) path;
     char *source_buf = (char*)buf;
 
     if (settings.write_limiter) {
@@ -1452,9 +1958,18 @@ static int bindfs_write(const char *path, const char *buf, size_t size,
     }
 #endif
 
+    /* Write-through: always write to backend first */
     res = pwrite(fi->fh, source_buf, size, offset);
     if (res == -1)
         res = -errno;
+    
+    /* Invalidate affected cache blocks and metadata on successful write */
+    if (res > 0 && cache_block_ctx != NULL) {
+        cache_block_invalidate_range(cache_block_ctx, path, offset, size);
+    }
+    if (res > 0 && cache_meta_ctx != NULL) {
+        cache_meta_invalidate(cache_meta_ctx, path);
+    }
 
 #ifdef __linux__
     if (source_buf != buf) {
@@ -1748,7 +2263,7 @@ static int bindfs_removexattr(const char *path, const char *name)
 #endif /* HAVE_SETXATTR */
 
 
-static struct fuse_operations bindfs_oper = {
+static struct fuse_operations cachefs_oper = {
     .init       = bindfs_init,
     .destroy    = bindfs_destroy,
     .getattr    = bindfs_getattr,
@@ -1800,7 +2315,7 @@ static struct fuse_operations bindfs_oper = {
 static void print_usage(const char *progname)
 {
     if (progname == NULL)
-        progname = "bindfs";
+        progname = "cachefs";
 
     printf("\n"
            "Usage: %s [options] dir mountpoint\n"
@@ -1880,6 +2395,15 @@ static void print_usage(const char *progname)
            "                            for security issue with current implementation.\n"
            "  --forward-odirect=...     Forward O_DIRECT (it's cleared by default).\n"
            "\n"
+           "CacheFS options:\n"
+           "  --cache-root=PATH         Cache directory (default: ~/.cache/cachefs/<mountid>).\n"
+           "  --cache-meta-ttl=SECS     Metadata TTL in seconds (default: 5).\n"
+           "  --cache-dir-ttl=SECS      Directory listing TTL in seconds (default: 10).\n"
+           "  --cache-block-size=BYTES  Block size in bytes (default: 262144 = 256KB).\n"
+           "  --cache-max-size=SIZE     Max cache size (default: 0 = unlimited).\n"
+           "                            Supports K, M, G, T suffixes (e.g., 1G, 500M).\n"
+           "  --cache-debug             Enable cache debug logging.\n"
+           "\n"
            "FUSE options:\n"
            "  -o opt[,opt,...]          Mount options.\n"
            "  -r      -o ro             Mount strictly read-only.\n"
@@ -1924,8 +2448,48 @@ enum OptionKey {
     OPTKEY_RESOLVE_SYMLINKS,
     OPTKEY_BLOCK_DEVICES_AS_FILES,
     OPTKEY_DIRECT_IO,
-    OPTKEY_NO_DIRECT_IO
+    OPTKEY_NO_DIRECT_IO,
+    OPTKEY_CACHE_ROOT,
+    OPTKEY_CACHE_META_TTL,
+    OPTKEY_CACHE_DIR_TTL,
+    OPTKEY_CACHE_BLOCK_SIZE,
+    OPTKEY_CACHE_MAX_SIZE,
+    OPTKEY_CACHE_DEBUG
 };
+
+/* Parse human-readable size strings like "1G", "500M", "10K" */
+static size_t parse_size(const char *str)
+{
+    char *endptr;
+    double value = strtod(str, &endptr);
+    
+    if (value < 0) {
+        return 0;
+    }
+    
+    size_t multiplier = 1;
+    if (*endptr != '\0') {
+        switch (*endptr) {
+            case 'K': case 'k':
+                multiplier = 1024;
+                break;
+            case 'M': case 'm':
+                multiplier = 1024 * 1024;
+                break;
+            case 'G': case 'g':
+                multiplier = 1024 * 1024 * 1024;
+                break;
+            case 'T': case 't':
+                multiplier = 1024ULL * 1024 * 1024 * 1024;
+                break;
+            default:
+                /* Assume bytes if no suffix or unrecognized */
+                break;
+        }
+    }
+    
+    return (size_t)(value * multiplier);
+}
 
 static int process_option(void *data, const char *arg, int key,
                           struct fuse_args *outargs)
@@ -2042,6 +2606,25 @@ static int process_option(void *data, const char *arg, int key,
         settings.direct_io = false;
         return 0;
 #endif
+    case OPTKEY_CACHE_ROOT:
+        /* arg is "--cache-root=PATH" */
+        settings.cache_root = strdup(strchr(arg, '=') + 1);
+        return 0;
+    case OPTKEY_CACHE_META_TTL:
+        settings.cache_meta_ttl = atoi(strchr(arg, '=') + 1);
+        return 0;
+    case OPTKEY_CACHE_DIR_TTL:
+        settings.cache_dir_ttl = atoi(strchr(arg, '=') + 1);
+        return 0;
+    case OPTKEY_CACHE_BLOCK_SIZE:
+        settings.cache_block_size = atol(strchr(arg, '=') + 1);
+        return 0;
+    case OPTKEY_CACHE_MAX_SIZE:
+        settings.cache_max_size = parse_size(strchr(arg, '=') + 1);
+        return 0;
+    case OPTKEY_CACHE_DEBUG:
+        settings.cache_debug = 1;
+        return 0;
     case OPTKEY_NONOPTION:
         if (!settings.mntsrc) {
             if (strncmp(arg, "/proc/", strlen("/proc/")) == 0) {
@@ -2553,6 +3136,14 @@ int main(int argc, char *argv[])
         OPT2("--enable-ioctl", "enable-ioctl", OPTKEY_ENABLE_IOCTL),
         OPT_OFFSET2("--multithreaded", "multithreaded", multithreaded, -1),
         OPT_OFFSET2("--forward-odirect=%s", "forward-odirect=%s", forward_odirect, -1),
+
+        OPT2("--cache-root=%s", "cache-root=%s", OPTKEY_CACHE_ROOT),
+        OPT2("--cache-meta-ttl=%s", "cache-meta-ttl=%s", OPTKEY_CACHE_META_TTL),
+        OPT2("--cache-dir-ttl=%s", "cache-dir-ttl=%s", OPTKEY_CACHE_DIR_TTL),
+        OPT2("--cache-block-size=%s", "cache-block-size=%s", OPTKEY_CACHE_BLOCK_SIZE),
+        OPT2("--cache-max-size=%s", "cache-max-size=%s", OPTKEY_CACHE_MAX_SIZE),
+        OPT2("--cache-debug", "cache-debug", OPTKEY_CACHE_DEBUG),
+
         OPT_OFFSET2("--uid-offset=%s", "uid-offset=%s", uid_offset, -1),
         OPT_OFFSET2("--gid-offset=%s", "gid-offset=%s", gid_offset, -1),
         OPT_OFFSET("fsname=%s", fsname, -1),
@@ -2609,6 +3200,14 @@ int main(int argc, char *argv[])
     settings.odirect_alignment = 0;
     settings.direct_io = false;
 #endif
+
+    /* Initialize CacheFS settings with defaults */
+    settings.cache_root = NULL;
+    settings.cache_meta_ttl = 5;  /* 5 seconds */
+    settings.cache_dir_ttl = 10;   /* 10 seconds */
+    settings.cache_block_size = DEFAULT_BLOCK_SIZE;  /* 256 KiB */
+    settings.cache_max_size = 0;   /* unlimited */
+    settings.cache_debug = 0;
 
     atexit(&atexit_func);
 
@@ -2937,12 +3536,58 @@ int main(int argc, char *argv[])
     /* Ignore the umask of the mounter on file creation */
     settings.original_umask = umask(0);
 
+    /* Initialize cache directory hierarchy early, before FUSE starts */
+    if (settings.cache_root == NULL) {
+        /* Generate default cache root based on source path hash to avoid conflicts
+         * with mount point names (e.g., if mount point is "mnt", we don't want
+         * cache at ~/.cache/cachefs/mnt which could cause confusion)
+         */
+        char *home = getenv("HOME");
+        if (home != NULL) {
+            /* Use absolute source path to generate unique cache directory name */
+            char abs_src[PATH_MAX];
+            if (realpath(settings.mntsrc, abs_src) != NULL) {
+                /* Create a simple hash from the absolute path */
+                unsigned long hash = 5381;
+                for (const char *p = abs_src; *p; p++) {
+                    hash = ((hash << 5) + hash) + (unsigned char)*p;
+                }
+                
+                settings.cache_root = malloc(PATH_MAX);
+                if (settings.cache_root != NULL) {
+                    snprintf(settings.cache_root, PATH_MAX, "%s/.cache/cachefs/%08lx", 
+                             home, hash & 0xFFFFFFFF);
+                }
+            }
+        }
+    }
+
+#ifdef HAVE_SQLITE3
+    if (settings.cache_root != NULL) {
+        /* Create cache root directory hierarchy */
+        char *cache_root_copy = strdup(settings.cache_root);
+        if (cache_root_copy != NULL) {
+            char *p = cache_root_copy;
+            while (*p == '/') p++;
+            
+            while ((p = strchr(p, '/')) != NULL) {
+                *p = '\0';
+                mkdir(cache_root_copy, 0700);
+                *p = '/';
+                p++;
+            }
+            mkdir(cache_root_copy, 0700);
+            free(cache_root_copy);
+        }
+    }
+#endif
+
     /* Remove xattr implementation if the user doesn't want it */
     if (settings.xattr_policy == XATTR_UNIMPLEMENTED) {
-        bindfs_oper.setxattr = NULL;
-        bindfs_oper.getxattr = NULL;
-        bindfs_oper.listxattr = NULL;
-        bindfs_oper.removexattr = NULL;
+        cachefs_oper.setxattr = NULL;
+        cachefs_oper.getxattr = NULL;
+        cachefs_oper.listxattr = NULL;
+        cachefs_oper.removexattr = NULL;
     }
 
 #if defined(HAVE_FUSE_29) || defined(HAVE_FUSE_3)
@@ -2963,8 +3608,8 @@ int main(int argc, char *argv[])
     /* Remove the locking implementation unless the user has enabled lock
        forwarding. FUSE implements locking inside the mountpoint by default. */
     if (!settings.enable_lock_forwarding) {
-        bindfs_oper.lock = NULL;
-        bindfs_oper.flock = NULL;
+        cachefs_oper.lock = NULL;
+        cachefs_oper.flock = NULL;
     }
 #else
     if (settings.enable_lock_forwarding) {
@@ -2982,17 +3627,26 @@ int main(int argc, char *argv[])
 #else
     /* Remove the ioctl implementation unless the user has enabled it */
     if (!settings.enable_ioctl) {
-        bindfs_oper.ioctl = NULL;
+        cachefs_oper.ioctl = NULL;
     }
 #endif
 
     /* Remove/Ignore some special -o options */
     args = filter_special_opts(&args);
 
+    /* Print cache settings if enabled */
+    if (settings.cache_root != NULL) {
+        fprintf(stderr, "[cachefs] Cache enabled at: %s\n", settings.cache_root);
+        fprintf(stderr, "[cachefs] Cache debug: %s\n", settings.cache_debug ? "ON" : "OFF");
+        fprintf(stderr, "[cachefs] Meta TTL: %d seconds\n", settings.cache_meta_ttl);
+        fprintf(stderr, "[cachefs] Dir TTL: %d seconds\n", settings.cache_dir_ttl);
+        fflush(stderr);
+    }
+
     /* fuse_main will daemonize by fork()'ing. The signal handler will persist. */
     setup_signal_handling();
 
-    fuse_main_return = fuse_main(args.argc, args.argv, &bindfs_oper, NULL);
+    fuse_main_return = fuse_main(args.argc, args.argv, &cachefs_oper, NULL);
 
     fuse_opt_free_args(&args);
     close(settings.mntsrc_fd);

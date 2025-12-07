@@ -1,6 +1,6 @@
 
-#ifndef INC_BINDFS_TEST_COMMON_H
-#define INC_BINDFS_TEST_COMMON_H
+#ifndef INC_CACHEFS_TEST_COMMON_H
+#define INC_CACHEFS_TEST_COMMON_H
 
 #include <stdio.h>
 #include <math.h>

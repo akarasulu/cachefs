@@ -17,8 +17,8 @@
     along with bindfs.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#ifndef INC_BINDFS_PERMCHAIN_H
-#define INC_BINDFS_PERMCHAIN_H
+#ifndef INC_CACHEFS_PERMCHAIN_H
+#define INC_CACHEFS_PERMCHAIN_H
 
 
 #include <config.h>

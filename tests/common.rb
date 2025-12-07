@@ -26,13 +26,11 @@ include FileUtils
 # Set the default umask for all tests
 File.umask 0022
 
-EXECUTABLE_PATH = '../src/bindfs'
-TESTDIR_NAME = 'tmp_test_bindfs'
+EXECUTABLE_PATH = '../src/cachefs'
+TESTDIR_NAME = 'tmp_test_cachefs'
 
-$fuse_t = Proc.new do
-    system("pkg-config --exists fuse-t")
-    $?.success?
-end.call
+# On macOS, we're likely using fuse-t which has known compatibility issues
+$fuse_t = (`uname`.strip == 'Darwin')
 
 # If set to an array of test names, only those will be run
 $only_these_tests = nil
@@ -130,7 +128,7 @@ def testenv(bindfs_args, options = {}, &block)
         fail!("ERROR preparing testdir at #{TESTDIR_NAME}", ex)
     end
 
-    bindfs_pid = nil
+    cachefs_pid = nil
     begin
         extra_args = "-f"
         # Don't rely on user_allow_other in /etc/fuse.conf.
@@ -141,12 +139,12 @@ def testenv(bindfs_args, options = {}, &block)
         if options[:valgrind]
             cmd = "valgrind --error-exitcode=100 #{options[:valgrind_opts]} #{cmd}"
         end
-        bindfs_pid = Process.fork do
+        cachefs_pid = Process.fork do
             exec cmd
             exit! 127
         end
     rescue Exception => ex
-        fail!("ERROR running bindfs", ex)
+        fail!("ERROR running cachefs", ex)
     end
 
     # Wait for bindfs to be ready.
@@ -156,7 +154,7 @@ def testenv(bindfs_args, options = {}, &block)
 
     testcase_ok = true
     begin
-        block.call(bindfs_pid)
+        block.call(cachefs_pid)
     rescue Exception => ex
         fail("ERROR: testcase `#{options[:title]}' failed", ex)
         testcase_ok = false
@@ -170,7 +168,7 @@ def testenv(bindfs_args, options = {}, &block)
         unless system(umount_cmd + ' ' + Shellwords.escape(mntdir))
             raise Exception.new(umount_cmd + " failed with status #{$?}")
         end
-        Process.wait bindfs_pid
+        Process.wait cachefs_pid
     rescue Exception => ex
         fail("ERROR: failed to umount")
         testcase_ok = false

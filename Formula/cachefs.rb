@@ -80,7 +80,9 @@ class Cachefs < Formula
     system "./autogen.sh"
     args = ["--prefix=#{prefix}"]
     # Prefer the FUSE2-compatible API on macOS; fuse3 pkg-config is not available from the macFUSE cask.
-    args += ["--with-fuse3=no", "--with-fuse2=yes", "--with-fuse_t=no"] if OS.mac?
+    if OS.mac?
+      args += ["--with-fuse3=no", "--with-fuse2=yes", "--with-fuse_t=no", "--disable-macos-fs-link"]
+    end
     system "./configure", *args
     system "make"
     system "make", "install"

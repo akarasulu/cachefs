@@ -70,7 +70,9 @@ sudo make install
 
 ### macOS Dependencies
 
-- **Build-time:** `pkg-config`, `autoconf`, `automake`, `libtool`, Xcode Command Line Tools (clang/make), `sqlite`, plus a FUSE implementation (macFUSE via `brew install --cask macfuse`, or fuse-t from https://www.fuse-t.org/).
+>**WARNING**: for headers install from [the DMG here](https://github.com/macfuse/macfuse/releases)
+
+- **Build-time:** `pkg-config`, `autoconf`, `automake`, `libtool`, Xcode Command Line Tools (clang/make), `sqlite`.
 - **Runtime:** FUSE implementation (macFUSE or fuse-t) and `sqlite`
 
 ## Packaging

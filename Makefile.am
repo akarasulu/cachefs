@@ -1,5 +1,5 @@
 SUBDIRS = src tests
-ACLOCAL_AMFLAGS = -I m4
+ACLOCAL_AMFLAGS = -I m4 ${ACLOCAL_FLAGS}
 
 vagrant-clean:
 	-for i in vagrant/*/Vagrantfile; do cd `dirname $$i` && (vagrant destroy -f || true) ; cd $$OLDPWD; done

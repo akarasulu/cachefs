@@ -2,6 +2,7 @@ AC_INIT([cachefs],[1.0.0],[akarasulu@gmail.com])
 
 AM_INIT_AUTOMAKE([foreign serial-tests])
 AC_CONFIG_HEADERS([config.h])
+AC_CONFIG_SRCDIR([src/cachefs.c])
 AC_CONFIG_MACRO_DIRS([m4])
 
 AC_PROG_CC
@@ -137,7 +138,9 @@ PKG_CHECK_MODULES([SQLITE3], [sqlite3],
         AC_MSG_ERROR([SQLite3 library not found. CacheFS requires SQLite for metadata caching. Install libsqlite3-dev (Linux) or sqlite (macOS) and retry.])
         ]
 )
-AM_CONDITIONAL([HAVE_SQLITE3], [test "x$have_sqlite3" = "xyes"])AC_CONFIG_FILES([Makefile \
+AM_CONDITIONAL([HAVE_SQLITE3], [test "x$have_sqlite3" = "xyes"])
+
+AC_CONFIG_FILES([Makefile \
     src/Makefile \
     tests/Makefile \
     tests/internals/Makefile])

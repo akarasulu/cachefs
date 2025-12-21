@@ -18,11 +18,15 @@ class Cachefs < Formula
   depends_on "automake" => :build
   depends_on "libtool" => :build
 
-  depends_on "sqlite"
-
   on_linux do
     depends_on "fuse3"
   end
+
+  on_macos do
+    depends_on macfuse: :cask
+  end
+
+  depends_on "sqlite"
 
   def install
     system "./autogen.sh"
@@ -33,9 +37,10 @@ class Cachefs < Formula
 
   def caveats
     <<~EOS
-      cachefs requires a macOS FUSE implementation. Install and approve macFUSE
-      (e.g., `brew install --cask fuse`) or fuse-t from its upstream package before use.
-      Ensure /etc/fuse.conf contains 'user_allow_other' if you need allow_other mounts.
+      cachefs requires a macOS FUSE implementation. macFUSE will be installed as a cask
+      dependency (or install/approve fuse-t from its upstream package). Approve the
+      system extension and ensure /etc/fuse.conf contains 'user_allow_other' if you
+      need allow_other mounts.
     EOS
   end
 

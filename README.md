@@ -70,15 +70,15 @@ sudo make install
 
 ### macOS Dependencies
 
-- **Build-time:** `pkg-config`, `autoconf`, `automake`, `libtool`, Xcode Command Line Tools (clang/make), `sqlite`, plus a FUSE implementation (install via `brew install --cask fuse` for macFUSE, or vendor pkg from https://www.fuse-t.org/).
+- **Build-time:** `pkg-config`, `autoconf`, `automake`, `libtool`, Xcode Command Line Tools (clang/make), `sqlite`, plus a FUSE implementation (macFUSE via `brew install --cask macfuse`, or fuse-t from https://www.fuse-t.org/).
 - **Runtime:** FUSE implementation (macFUSE or fuse-t) and `sqlite`
 
 ## Packaging
 
 - **macOS `.pkg`:** `make pkg` (requires `pkgbuild` / Xcode CLT). Output: `dist/cachefs-<version>.pkg`.
 - **Debian `.deb`:** `make deb` (requires `dpkg-deb`). Output: `dist/cachefs_<version>_<arch>.deb` with `Depends: fuse3, sqlite3`.
-- **Homebrew tap/formula:** This repo can act as a tap. From a checkout: `brew install --build-from-source ./Formula/cachefs.rb` (or `--build-bottle` then `brew bottle cachefs`). As a tap: `brew tap <user>/cachefs <repo-url>` then `brew install <user>/cachefs/cachefs`. Uses the same deps: build-time `pkg-config`, autotools, FUSE implementation, `sqlite`; runtime FUSE implementation + `sqlite`.
-- **Homebrew bottle from this repo:** `make brew` (alias `make tap`) builds a Homebrew bottle in `dist/bottles/` using the local formula. After uploading the `.tar.gz` and `.bottle.json` somewhere permanent, add the `bottle do` block to `Formula/cachefs.rb` with the generated `sha256` entries. Once that block is present, users can `brew tap <user>/cachefs <repo-url>` and `brew install <user>/cachefs/cachefs` to pull the bottle automatically.
+- **Homebrew tap/formula:** This repo can act as a tap. From a checkout: `brew install --build-from-source ./Formula/cachefs.rb` (or `--build-bottle` then `brew bottle cachefs`). As a tap: `brew tap <user>/cachefs <repo-url>` then `brew install <user>/cachefs/cachefs`. Uses the same deps: build-time `pkg-config`, autotools, FUSE implementation (macFUSE cask on macOS), `sqlite`; runtime FUSE implementation + `sqlite`.
+- **Homebrew bottle from this repo:** `make brew` (alias `make tap`) builds a Homebrew bottle in `dist/bottles/` using the local formula. After uploading the `.tar.gz` and `.bottle.json` somewhere permanent, add the `bottle do` block to `Formula/cachefs.rb` with the generated `sha256` entries. Once that block is present, users can `brew tap <user>/cachefs <repo-url>` and `brew install <user>/cachefs/cachefs` to pull the bottle automatically (macOS users will be prompted to install/approve the macFUSE cask).
 
 ### Configuration
 

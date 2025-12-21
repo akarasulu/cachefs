@@ -24,6 +24,7 @@ class Cachefs < Formula
       # Headers may live under /Library/Filesystems or /Library/Frameworks on macOS 12.
       macfuse_incdirs = [
         macfuse_prefix/"include/osxfuse",
+        macfuse_prefix/"include",
         Pathname("/Library/Filesystems/macfuse.fs/Contents/Headers"),
         Pathname("/Library/Frameworks/macfuse.framework/Versions/Current/Headers")
       ].select(&:directory?)
@@ -73,7 +74,7 @@ class Cachefs < Formula
       ENV.prepend_path "PKG_CONFIG_PATH", pcdir
       ENV["PKG_CONFIG_LIBDIR"] = [pcdir, ENV["PKG_CONFIG_LIBDIR"]].compact.join(File::PATH_SEPARATOR)
       ENV.append "LDFLAGS", "-Wl,-rpath,#{libdir} #{link_flags} -losxfuse -pthread"
-      ENV.append "CPPFLAGS", "-I#{incdir}"
+      ENV.append "CPPFLAGS", "-I#{incdir} -I#{incdir}/fuse"
     end
 
     system "./autogen.sh"

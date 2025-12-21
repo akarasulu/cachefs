@@ -133,9 +133,7 @@ PKG_CHECK_MODULES([SQLITE3], [sqlite3],
         have_sqlite3=yes
         ],
         [
-        AC_MSG_WARN([SQLite3 library not found. Metadata cache will be disabled.])
-        AC_MSG_WARN([Install libsqlite3-dev or sqlite package to enable metadata caching.])
-        have_sqlite3=no
+        AC_MSG_ERROR([SQLite3 library not found. CacheFS requires SQLite for metadata caching. Install libsqlite3-dev (Linux) or sqlite (macOS) and retry.])
         ]
 )
 AM_CONDITIONAL([HAVE_SQLITE3], [test "x$have_sqlite3" = "xyes"])AC_CONFIG_FILES([Makefile \
@@ -143,4 +141,3 @@ AM_CONDITIONAL([HAVE_SQLITE3], [test "x$have_sqlite3" = "xyes"])AC_CONFIG_FILES(
     tests/Makefile \
     tests/internals/Makefile])
 AC_OUTPUT
-

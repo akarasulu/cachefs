@@ -4,10 +4,10 @@
 
 CacheFS - https://github.com/akarasulu/cachefs
 
-CacheFS is a **fork of [bindfs](https://bindfs.org/)** that adds persistent metadata and block-level caching to FUSE filesystems. It's designed to accelerate access to remote filesystems (SMB, NFS, etc.) while preserving all of bindfs's powerful permission remapping features.
+CacheFS is a **fork of [bindfs](https://bindfs.org/)** that adds persistent metadata and block-level caching to FUSE filesystems. It's designed to accelerate access to slow filesystems (USB, SMB, NFS, etc.) while preserving all of bindfs' powerful permission remapping features.
 
 **Key Features:**
-- **Fast metadata cache** using [LMDB](http://www.lmdb.tech/) (embedded key-value database)
+- **Fast metadata cache** backed by SQLite (embedded SQL database)
 - **Block-level file caching** with configurable block size (default 256KB)
 - **Write-through semantics** with automatic cache invalidation
 - **TTL-based cache expiration** for metadata and directory listings
@@ -33,14 +33,14 @@ Everything bindfs can do, plus:
 ### Requirements
 
 - **FUSE** 2.8.0 or above (FUSE 3 recommended)
-- **LMDB** (Lightning Memory-Mapped Database) - optional but recommended for caching
+- **SQLite** (embedded database for metadata caching)
 - Standard build tools (gcc, make, pkg-config)
 
 ### Linux
 
 ```bash
 # Install dependencies
-sudo apt install build-essential pkg-config libfuse3-dev liblmdb-dev
+sudo apt install build-essential pkg-config libfuse3-dev libsqlite3-dev
 
 # Build from source
 ./autogen.sh  # Only needed if you cloned the repo
@@ -53,7 +53,9 @@ sudo make install
 
 ```bash
 # Install dependencies
-brew install pkg-config fuse-t lmdb
+brew install pkg-config autoconf automake libtool sqlite
+# Install a macOS FUSE implementation separately (e.g., macFUSE via `brew install --cask fuse`
+# or fuse-t from https://www.fuse-t.org/).
 
 # Build from source
 ./autogen.sh
@@ -62,7 +64,21 @@ make
 sudo make install
 ```
 
-**Note:** If LMDB is not available, CacheFS will compile without caching features and function as regular bindfs.
+**Note:** Homebrew does not ship a `fuse-t` formula. Install macFUSE via `brew install --cask fuse` (or the fuse-t vendor pkg) before building or running CacheFS on macOS.
+
+**Note:** SQLite is required; builds fail without it and `cachefs` will not run if `libsqlite3` is missing at runtime.
+
+### macOS Dependencies
+
+- **Build-time:** `pkg-config`, `autoconf`, `automake`, `libtool`, Xcode Command Line Tools (clang/make), `sqlite`, plus a FUSE implementation (install via `brew install --cask fuse` for macFUSE, or vendor pkg from https://www.fuse-t.org/).
+- **Runtime:** FUSE implementation (macFUSE or fuse-t) and `sqlite`
+
+## Packaging
+
+- **macOS `.pkg`:** `make pkg` (requires `pkgbuild` / Xcode CLT). Output: `dist/cachefs-<version>.pkg`.
+- **Debian `.deb`:** `make deb` (requires `dpkg-deb`). Output: `dist/cachefs_<version>_<arch>.deb` with `Depends: fuse3, sqlite3`.
+- **Homebrew tap/formula:** This repo can act as a tap. From a checkout: `brew install --build-from-source ./Formula/cachefs.rb` (or `--build-bottle` then `brew bottle cachefs`). As a tap: `brew tap <user>/cachefs <repo-url>` then `brew install <user>/cachefs/cachefs`. Uses the same deps: build-time `pkg-config`, autotools, FUSE implementation, `sqlite`; runtime FUSE implementation + `sqlite`.
+- **Homebrew bottle from this repo:** `make brew` (alias `make tap`) builds a Homebrew bottle in `dist/bottles/` using the local formula. After uploading the `.tar.gz` and `.bottle.json` somewhere permanent, add the `bottle do` block to `Formula/cachefs.rb` with the generated `sha256` entries. Once that block is present, users can `brew tap <user>/cachefs <repo-url>` and `brew install <user>/cachefs/cachefs` to pull the bottle automatically.
 
 ### Configuration
 
@@ -149,9 +165,9 @@ Check cache size:
 du -sh ~/.cache/cachefs/*/
 ```
 
-View cache metadata (LMDB):
+Inspect cache metadata (SQLite):
 ```bash
-mdb_stat -a ~/.cache/cachefs/<mountid>/
+sqlite3 ~/.cache/cachefs/<mountid>/metadata.db "SELECT COUNT(*) FROM metadata;"
 ```
 
 ### Unmounting
@@ -166,7 +182,7 @@ umount /mount/point
 
 ## How Caching Works
 
-### Metadata Cache (LMDB)
+### Metadata Cache (SQLite)
 
 - Stores file attributes: size, mtime, ctime, mode, uid, gid
 - Stores directory entries with types (file/dir/symlink)
@@ -212,7 +228,7 @@ Refer to the [bindfs documentation](https://bindfs.org/) for details on non-cach
 
 CacheFS extends bindfs with three new modules:
 
-1. **`cache_meta.c/h`** - LMDB-based metadata cache
+1. **`cache_meta.c/h`** - SQLite-based metadata cache
 2. **`cache_block.c/h`** - Block storage management
 3. **`cache_coherency.c/h`** - Revalidation logic
 
@@ -293,7 +309,7 @@ CacheFS is based on bindfs by Martin Pärtel and contributors.
 ## Credits
 
 - **bindfs** by Martin Pärtel - https://bindfs.org/
-- **LMDB** by Symas Corporation - http://www.lmdb.tech/
+- **SQLite** by D. Richard Hipp and contributors - https://www.sqlite.org/
 - **FUSE** by Miklos Szeredi and contributors
 
 ---

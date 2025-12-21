@@ -3026,6 +3026,11 @@ static bool keep_option(const char* opt)
 
 int main(int argc, char *argv[])
 {
+#ifndef HAVE_SQLITE3
+    fprintf(stderr, "CacheFS requires SQLite support for metadata caching. Rebuild with libsqlite3 installed.\n");
+    return 1;
+#endif
+
     struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 
     /* Fuse's option parser will store things here. */

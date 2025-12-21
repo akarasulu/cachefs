@@ -32,7 +32,7 @@ pushd "${root_dir}" >/dev/null
 
 echo ">> Creating tap ${tap_name} from ${tap_url}"
 brew untap "${tap_name}" >/dev/null || true
-brew tap "${tap_name}" "${tap_url}" --force-auto-update
+brew tap "${tap_name}" "${tap_url}"
 
 echo ">> Installing for bottling"
 brew install --build-bottle "${tap_name}/cachefs"

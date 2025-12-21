@@ -28,8 +28,8 @@ class Cachefs < Formula
         Pathname("/Library/Frameworks/macfuse.framework/Versions/Current/Headers")
       ].select(&:directory?)
       macfuse_libdirs = [
-        macfuse_prefix/"lib",
-        Pathname("/Library/Filesystems/macfuse.fs/Contents/Libraries")
+        Pathname("/Library/Filesystems/macfuse.fs/Contents/Libraries"),
+        macfuse_prefix/"lib"
       ].select(&:directory?)
 
       odie "macFUSE headers not found; install/approve macFUSE" if macfuse_incdirs.empty?
@@ -57,7 +57,7 @@ class Cachefs < Formula
       end
       ENV.prepend_path "PKG_CONFIG_PATH", pcdir
       ENV["PKG_CONFIG_LIBDIR"] = [pcdir, ENV["PKG_CONFIG_LIBDIR"]].compact.join(File::PATH_SEPARATOR)
-      ENV.append "LDFLAGS", "-L#{libdir} -losxfuse -pthread"
+      ENV.append "LDFLAGS", "-Wl,-rpath,#{libdir} -L#{libdir} -losxfuse -pthread"
       ENV.append "CPPFLAGS", "-I#{incdir}"
     end
 

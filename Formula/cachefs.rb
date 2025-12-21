@@ -18,10 +18,9 @@ class Cachefs < Formula
   depends_on "sqlite"
 
   def install
-    macfuse_prefix = HOMEBREW_PREFIX
-
     if OS.mac?
-      # macFUSE (cask) does not ship pkg-config files; generate shims so configure can find it.
+      macfuse_prefix = HOMEBREW_PREFIX
+      # macFUSE (cask) does not ship pkg-config files; generate shims and wire flags for configure.
       pcdir = buildpath/"pkgconfig"
       pcdir.mkpath
       %w[fuse fuse3].each do |name|
@@ -40,6 +39,9 @@ class Cachefs < Formula
         EOS
       end
       ENV.prepend_path "PKG_CONFIG_PATH", pcdir
+      ENV["PKG_CONFIG_LIBDIR"] = [pcdir, ENV["PKG_CONFIG_LIBDIR"]].compact.join(File::PATH_SEPARATOR)
+      ENV.append "LDFLAGS", "-L#{macfuse_prefix}/lib -losxfuse -pthread"
+      ENV.append "CPPFLAGS", "-I#{macfuse_prefix}/include -I#{macfuse_prefix}/include/osxfuse"
     end
 
     system "./autogen.sh"

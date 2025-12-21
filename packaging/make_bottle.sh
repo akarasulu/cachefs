@@ -19,12 +19,19 @@ mkdir -p "${dist_dir}"
 mkdir -p "${tmp_tap}/Formula"
 cp "${formula_path}" "${tmp_tap}/Formula/"
 
+# Homebrew expects taps to be git repos
+pushd "${tmp_tap}" >/dev/null
+git init -q
+git config user.email "cachefs@example.com"
+git config user.name "cachefs"
+git add Formula/cachefs.rb
+git commit -q -m "Add cachefs formula"
+popd >/dev/null
+
 pushd "${root_dir}" >/dev/null
 
-echo ">> Tapping ${tap_name} from ${tap_url}"
-if brew tap-info --installed "${tap_name}" >/dev/null 2>&1; then
-  brew untap "${tap_name}"
-fi
+echo ">> Creating tap ${tap_name} from ${tap_url}"
+brew untap "${tap_name}" >/dev/null || true
 brew tap "${tap_name}" "${tap_url}" --force-auto-update
 
 echo ">> Installing for bottling"

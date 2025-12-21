@@ -6,13 +6,6 @@ class Cachefs < Formula
   license "GPL-2.0-or-later"
   head "https://github.com/akarasulu/cachefs.git", branch: "main"
 
-  # TODO: Replace placeholders with real bottle URLs and sha256 once bottled and hosted.
-  bottle do
-    root_url "https://example.com/cachefs/bottles"
-    sha256 cellar: :any, arm64_monterey: "<sha256-arm64-monterey>"
-    sha256 cellar: :any, monterey: "<sha256-monterey>"
-  end
-
   depends_on "pkg-config" => :build
   depends_on "autoconf" => :build
   depends_on "automake" => :build

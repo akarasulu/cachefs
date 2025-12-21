@@ -40,24 +40,39 @@ class Cachefs < Formula
 
       pcdir = buildpath/"pkgconfig"
       pcdir.mkpath
+      staging_lib = buildpath/"macfuse-lib"
+      staging_lib.mkpath
+
+      # Some macFUSE installs only ship versioned dylibs; create unversioned symlink for the linker.
+      if !(libdir/"libosxfuse.dylib").exist?
+        if (libdir/"libosxfuse.2.dylib").exist?
+          ln_sf libdir/"libosxfuse.2.dylib", staging_lib/"libosxfuse.dylib"
+        elsif (libdir/"libosxfuse_i64.2.dylib").exist?
+          ln_sf libdir/"libosxfuse_i64.2.dylib", staging_lib/"libosxfuse.dylib"
+        end
+      end
+
+      link_dirs = [staging_lib, libdir].map(&:to_s).uniq
+      link_flags = link_dirs.map { |d| "-L#{d}" }.join(" ")
+
       %w[fuse fuse3].each do |name|
         (pcdir/"#{name}.pc").write <<~EOS
           prefix=#{macfuse_prefix}
           exec_prefix=${prefix}
-          libdir=#{libdir}
+          libdir=#{link_dirs.join(":")}
           includedir=#{incdir}
           osxfuse_incdir=#{incdir}
 
           Name: #{name}
           Description: macFUSE userspace library
           Version: 3.11.0
-          Libs: -L${libdir} -losxfuse -pthread
+          Libs: #{link_flags} -losxfuse -pthread
           Cflags: -I${includedir} -I${osxfuse_incdir}
         EOS
       end
       ENV.prepend_path "PKG_CONFIG_PATH", pcdir
       ENV["PKG_CONFIG_LIBDIR"] = [pcdir, ENV["PKG_CONFIG_LIBDIR"]].compact.join(File::PATH_SEPARATOR)
-      ENV.append "LDFLAGS", "-Wl,-rpath,#{libdir} -L#{libdir} -losxfuse -pthread"
+      ENV.append "LDFLAGS", "-Wl,-rpath,#{libdir} #{link_flags} -losxfuse -pthread"
       ENV.append "CPPFLAGS", "-I#{incdir}"
     end
 

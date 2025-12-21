@@ -2,6 +2,7 @@ AC_INIT([cachefs],[1.0.0],[akarasulu@gmail.com])
 
 AM_INIT_AUTOMAKE([foreign serial-tests])
 AC_CONFIG_HEADERS([config.h])
+AC_CONFIG_MACRO_DIRS([m4])
 
 AC_PROG_CC
 AC_LANG(C)

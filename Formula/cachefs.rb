@@ -97,6 +97,12 @@ class Cachefs < Formula
     EOS
   end
 
+  bottle do
+    root_url "file:///Users/aok/cachefs/dist/bottles"
+    rebuild 1
+    sha256 cellar: :any, monterey: "f87e68ae0be2e862767b103be117d9eb8ddc46f3e76ebd71aeab2e4cf361e2e3"
+  end
+
   test do
     system "#{bin}/cachefs", "--version"
   end

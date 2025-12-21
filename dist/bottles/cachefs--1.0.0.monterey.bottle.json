@@ -1,0 +1,76 @@
+{
+  "local/cachefs/cachefs": {
+    "formula": {
+      "name": "cachefs",
+      "pkg_version": "1.0.0",
+      "path": "Library/Taps/local/homebrew-cachefs/Formula/cachefs.rb",
+      "tap_git_path": "Formula/cachefs.rb",
+      "tap_git_revision": "5ac565ccf922dc017371d8635d5c04304e46e018",
+      "tap_git_remote": "file:///Users/aok/cachefs/.brew-tap-temp",
+      "desc": "FUSE caching filesystem fork of bindfs with SQLite metadata store",
+      "license": "GPL-2.0-or-later",
+      "homepage": "https://github.com/akarasulu/cachefs"
+    },
+    "bottle": {
+      "root_url": "file:///Users/aok/cachefs/dist/bottles",
+      "cellar": "any",
+      "rebuild": 1,
+      "date": "2025-12-21T17:18:23Z",
+      "tags": {
+        "monterey": {
+          "filename": "cachefs-1.0.0.monterey.bottle.1.tar.gz",
+          "local_filename": "cachefs--1.0.0.monterey.bottle.1.tar.gz",
+          "sha256": "f87e68ae0be2e862767b103be117d9eb8ddc46f3e76ebd71aeab2e4cf361e2e3",
+          "tab": {
+            "homebrew_version": ">=4.3.0 (shallow or no git repository)",
+            "changed_files": [],
+            "source_modified_time": 1766337311,
+            "compiler": "clang",
+            "runtime_dependencies": [
+              {
+                "full_name": "readline",
+                "version": "8.2.13",
+                "revision": 0,
+                "bottle_rebuild": 0,
+                "pkg_version": "8.2.13",
+                "declared_directly": false
+              },
+              {
+                "full_name": "sqlite",
+                "version": "3.46.1",
+                "revision": 0,
+                "bottle_rebuild": 0,
+                "pkg_version": "3.46.1",
+                "declared_directly": true
+              }
+            ],
+            "arch": "x86_64",
+            "built_on": {
+              "os": "Macintosh",
+              "os_version": "macOS 12.7",
+              "cpu_family": "penryn",
+              "xcode": "14.2",
+              "clt": "14.2.0.0.1.1668646533",
+              "preferred_perl": "5.30"
+            }
+          },
+          "path_exec_files": [
+            "bin/cachefs"
+          ],
+          "all_files": [
+            ".brew/cachefs.rb",
+            "COPYING",
+            "ChangeLog",
+            "INSTALL_RECEIPT.json",
+            "README.md",
+            "TODO",
+            "bin/cachefs",
+            "sbom.spdx.json",
+            "share/man/man1/cachefs.1"
+          ],
+          "installed_size": 188258
+        }
+      }
+    }
+  }
+}

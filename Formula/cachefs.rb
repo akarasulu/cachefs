@@ -21,15 +21,32 @@ class Cachefs < Formula
     if OS.mac?
       macfuse_prefix = HOMEBREW_PREFIX
       # macFUSE (cask) does not ship pkg-config files; generate shims and wire flags for configure.
+      # Headers may live under /Library/Filesystems or /Library/Frameworks on macOS 12.
+      macfuse_incdirs = [
+        macfuse_prefix/"include/osxfuse",
+        Pathname("/Library/Filesystems/macfuse.fs/Contents/Headers"),
+        Pathname("/Library/Frameworks/macfuse.framework/Versions/Current/Headers")
+      ].select(&:directory?)
+      macfuse_libdirs = [
+        macfuse_prefix/"lib",
+        Pathname("/Library/Filesystems/macfuse.fs/Contents/Libraries")
+      ].select(&:directory?)
+
+      odie "macFUSE headers not found; install/approve macFUSE" if macfuse_incdirs.empty?
+      odie "macFUSE libraries not found; install/approve macFUSE" if macfuse_libdirs.empty?
+
+      incdir = macfuse_incdirs.first
+      libdir = macfuse_libdirs.first
+
       pcdir = buildpath/"pkgconfig"
       pcdir.mkpath
       %w[fuse fuse3].each do |name|
         (pcdir/"#{name}.pc").write <<~EOS
           prefix=#{macfuse_prefix}
           exec_prefix=${prefix}
-          libdir=${exec_prefix}/lib
-          includedir=${prefix}/include
-          osxfuse_incdir=${prefix}/include/osxfuse
+          libdir=#{libdir}
+          includedir=#{incdir}
+          osxfuse_incdir=#{incdir}
 
           Name: #{name}
           Description: macFUSE userspace library
@@ -40,8 +57,8 @@ class Cachefs < Formula
       end
       ENV.prepend_path "PKG_CONFIG_PATH", pcdir
       ENV["PKG_CONFIG_LIBDIR"] = [pcdir, ENV["PKG_CONFIG_LIBDIR"]].compact.join(File::PATH_SEPARATOR)
-      ENV.append "LDFLAGS", "-L#{macfuse_prefix}/lib -losxfuse -pthread"
-      ENV.append "CPPFLAGS", "-I#{macfuse_prefix}/include -I#{macfuse_prefix}/include/osxfuse"
+      ENV.append "LDFLAGS", "-L#{libdir} -losxfuse -pthread"
+      ENV.append "CPPFLAGS", "-I#{incdir}"
     end
 
     system "./autogen.sh"

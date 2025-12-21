@@ -34,8 +34,9 @@ echo ">> Creating tap ${tap_name} from ${tap_url}"
 brew untap "${tap_name}" >/dev/null || true
 brew tap "${tap_name}" "${tap_url}"
 
-echo ">> Installing for bottling"
-brew install --build-bottle "${tap_name}/cachefs"
+echo ">> Installing for bottling (overwrite any existing files)"
+brew uninstall --ignore-dependencies "${tap_name}/cachefs" >/dev/null 2>&1 || true
+brew install --build-bottle --overwrite --force "${tap_name}/cachefs"
 
 echo ">> Bottling cachefs (root-url=file://${dist_dir})"
 brew bottle --json --root-url="file://${dist_dir}" "${tap_name}/cachefs"

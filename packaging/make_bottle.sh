@@ -6,8 +6,8 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 formula_path="${root_dir}/Formula/cachefs.rb"
 dist_dir="${root_dir}/dist/bottles"
 tap_name="local/cachefs"
-# create a temporary tap so Homebrew accepts the formula location
-tmp_tap="$(mktemp -d "${TMPDIR:-/tmp}/cachefs-tap-XXXXXX")"
+# deterministic temporary tap so remote mismatch warnings do not occur across runs
+tmp_tap="${root_dir}/.brew-tap-temp"
 tap_url="file://${tmp_tap}"
 
 if ! command -v brew >/dev/null 2>&1; then
@@ -16,6 +16,7 @@ if ! command -v brew >/dev/null 2>&1; then
 fi
 
 mkdir -p "${dist_dir}"
+rm -rf "${tmp_tap}"
 mkdir -p "${tmp_tap}/Formula"
 cp "${formula_path}" "${tmp_tap}/Formula/"
 
@@ -31,6 +32,7 @@ popd >/dev/null
 pushd "${root_dir}" >/dev/null
 
 echo ">> Creating tap ${tap_name} from ${tap_url}"
+brew uninstall --ignore-dependencies "${tap_name}/cachefs" >/dev/null 2>&1 || true
 brew untap "${tap_name}" >/dev/null || true
 brew tap "${tap_name}" "${tap_url}"
 
